@@ -10,10 +10,10 @@
  *
  */
 
-#include "../HCSR04/HCSR04.h"
+#include "HCSR04.h"
 
-#include "../HCSR04/dwt_stm32_delay.h"
-#include "../HCSR04/HCSR04_cfg.h"
+#include "dwt_stm32_delay.h"
+#include "HCSR04_cfg.h"
 
 typedef struct
 {

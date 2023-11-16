@@ -27,6 +27,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <stdbool.h>
+#include "HCSR04.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -53,6 +54,7 @@ typedef struct {
 #define SERVO_ANGLE		(90U)
 #define MAX_ATTEMPTS 	(3U)
 #define DELAY_TIME 		(500U)
+#define HCSR04_SENSOR1  (0U)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -85,6 +87,7 @@ uint8_t cmdli;
 uint32_t code;
 uint32_t tempCode;
 InfraredValues infrared;
+float Distance = 0.0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -160,12 +163,18 @@ int main(void)
   __HAL_TIM_SET_COUNTER(&htim11, 0);
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
   ServoWrite(90);
+  HCSR04_Init(HCSR04_SENSOR1, &htim2);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+//	  HCSR04_Trigger(HCSR04_SENSOR1);
+//	  HAL_Delay(15);
+//	  Distance = HCSR04_Read(HCSR04_SENSOR1);
+//	  printf("Distance = %d cm\r\n", (int) Distance);
+//	  HAL_Delay(1000);
 	if (flagCmdCompletion)
 	{
 	  flagCmdCompletion = false;
@@ -342,6 +351,14 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 	}
 }
 
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+	if (htim->Instance == TIM2)
+	{
+		HCSR04_TMR_IC_ISR(htim);
+	}
+}
+
 // Interrupt Handling Function
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
@@ -350,6 +367,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		HAL_TIM_Base_Stop_IT(htim);
 		flagDirect = !flagDirect;
 		STOP();
+	}
+
+	if (htim->Instance == TIM2)
+	{
+		HCSR04_TMR_OVF_ISR(htim);
 	}
 }
 
@@ -499,9 +521,9 @@ void ServoWrite(int angle)
 
 void ReadSensors(InfraredValues* infrared)
 {
-	infrared->LeftTraValue = HAL_GPIO_ReadPin(D7_GPIO_Port, D7_Pin);
-    infrared->CenterTraValue = HAL_GPIO_ReadPin(D8_GPIO_Port, D8_Pin);
-    infrared->RightTraValue = HAL_GPIO_ReadPin(D12_GPIO_Port, D12_Pin);
+	infrared->LeftTraValue = HAL_GPIO_ReadPin(A1_GPIO_Port, A1_Pin);
+    infrared->CenterTraValue = HAL_GPIO_ReadPin(D7_GPIO_Port, D7_Pin);
+    infrared->RightTraValue = HAL_GPIO_ReadPin(D8_GPIO_Port, D8_Pin);
 }
 
 void InfraredTracing(InfraredValues* infrared)

@@ -10,7 +10,7 @@
  *
  */
 
-#include "../HCSR04/HCSR04.h"
+#include "HCSR04.h"
 
 const HCSR04_CfgType HCSR04_CfgParam[HCSR04_UNITS] =
 {
