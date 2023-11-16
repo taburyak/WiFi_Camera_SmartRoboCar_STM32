@@ -78,7 +78,7 @@ uint8_t rxBuffer_2[CMD_LEN_2] = {'\000'};
 uint8_t rxBuffer_6[CMD_LEN_6] = {'\000'};
 volatile uint8_t cmd = '\000';
 volatile bool flagCmdCompletion = false;
-bool flagDirect = false;
+volatile bool flagDirect = false;
 uint8_t servoAngle = SERVO_ANGLE;
 uint8_t bitIndex;
 uint8_t cmdli;
