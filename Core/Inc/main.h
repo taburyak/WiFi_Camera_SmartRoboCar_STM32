@@ -84,7 +84,7 @@ void Error_Handler(void);
 #define D4_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
-
+#define DELAY_MAX_CUSTOM_TIMERS (10U)
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
