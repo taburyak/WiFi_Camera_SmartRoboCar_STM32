@@ -27,7 +27,8 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <stdbool.h>
-#include "HCSR04.h"
+//#include "HCSR04.h"
+#include "tm_stm32_delay.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -46,20 +47,25 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define FORWARD_SPEED	(70U)
-#define ROTATE_SPEED 	(FORWARD_SPEED / 2)
-#define CMD_LEN_1		(3U)
-#define CMD_LEN_2		(4U)
-#define CMD_LEN_6		(3U)
-#define SERVO_ANGLE		(90U)
-#define MAX_ATTEMPTS 	(3U)
-#define DELAY_TIME 		(500U)
-#define HCSR04_SENSOR1  (0U)
+#define FORWARD_SPEED			(70U)
+#define ROTATE_SPEED 			(FORWARD_SPEED / 2)
+#define CMD_LEN_1				(3U)
+#define CMD_LEN_2				(4U)
+#define CMD_LEN_6				(3U)
+#define SERVO_ANGLE				(90U)
+#define MAX_ATTEMPTS 			(3U)
+#define AUTO_STOP_DELAY_TIME	(500U)
+#define HCSR04_SENSOR1  		(0U)
+#define PERIOD_SCAN_MOVE_CMD	(20U)
+#define REPEAT					(1U)
+#define ONCE					(0U)
+#define IMMEDIATELY				(1U)
+#define AFTER_START_API			(0U)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-#define DELAY(x)	x*2
+
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -88,6 +94,8 @@ uint32_t code;
 uint32_t tempCode;
 InfraredValues infrared;
 float Distance = 0.0;
+TM_DELAY_Timer_t* pTimerScanMoveCmd;
+TM_DELAY_Timer_t* pTimerAutoStop;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -97,12 +105,16 @@ void Move_Forward(uint32_t car_speed);
 void Move_Backward(uint32_t car_speed);
 void Rotate_Left(uint32_t car_speed);
 void Rotate_Right(uint32_t car_speed);
-void STOP();
+void Move_Left(uint32_t car_speed);
+void Move_Right(uint32_t car_speed);
+void Move_Stop();
 uint8_t ConvertCode (uint32_t code);
 int map(int st1, int fn1, int st2, int fn2, int value);
 void ServoWrite(int angle);
 void InfraredTracing(InfraredValues* infrared);
 void ReadSensors(InfraredValues* infrared);
+void ScanMoveCmd(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
+void AutoStopMove(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -147,7 +159,6 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM3_Init();
   MX_USART6_UART_Init();
-  MX_TIM10_Init();
   MX_USART1_UART_Init();
   MX_TIM11_Init();
   MX_TIM4_Init();
@@ -158,12 +169,14 @@ int main(void)
   HAL_UART_Receive_DMA(&huart1, rxBuffer_1, CMD_LEN_1);
   HAL_UART_Receive_DMA(&huart2, rxBuffer_2, CMD_LEN_2);
   HAL_UART_Receive_DMA(&huart6, rxBuffer_6, CMD_LEN_6);
-  __HAL_TIM_CLEAR_FLAG(&htim10, TIM_SR_UIF);
   HAL_TIM_Base_Start(&htim11);
   __HAL_TIM_SET_COUNTER(&htim11, 0);
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
   ServoWrite(90);
-  HCSR04_Init(HCSR04_SENSOR1, &htim2);
+  TM_DELAY_Init();
+  pTimerScanMoveCmd	= TM_DELAY_TimerCreate(PERIOD_SCAN_MOVE_CMD, REPEAT, IMMEDIATELY, ScanMoveCmd, NULL);
+  pTimerAutoStop = TM_DELAY_TimerCreate(AUTO_STOP_DELAY_TIME, ONCE, AFTER_START_API, AutoStopMove, NULL);
+//  HCSR04_Init(HCSR04_SENSOR1, &htim2);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -194,7 +207,7 @@ int main(void)
 				Rotate_Right((uint32_t) ROTATE_SPEED);
 				break;
 			case 'S':
-				STOP();
+				Move_Stop();
 				break;
 			case 'H':
 				servoAngle = servoAngle + 4;
@@ -215,7 +228,7 @@ int main(void)
 			case 'T':
 				InfraredTracing(&infrared);
 			default:
-				STOP();
+				Move_Stop();
 				break;
 	  }
 		  cmd = '\000';
@@ -345,8 +358,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 			rxBuffer_6[1] = '\000';
 			rxBuffer_6[2] = '\000';
 			flagCmdCompletion = true;
-			__HAL_TIM_SET_AUTORELOAD(&htim10, DELAY(1000));
-			HAL_TIM_Base_Start_IT(&htim10);
+			pTimerAutoStop = TM_DELAY_TimerAutoReloadValue(pTimerAutoStop, AUTO_STOP_DELAY_TIME);
+			pTimerAutoStop = TM_DELAY_TimerStart(pTimerAutoStop);
 		}
 	}
 }
@@ -355,7 +368,7 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 {
 	if (htim->Instance == TIM2)
 	{
-		HCSR04_TMR_IC_ISR(htim);
+//		HCSR04_TMR_IC_ISR(htim);
 	}
 }
 
@@ -365,56 +378,73 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	if (htim->Instance == TIM10)
 	{
 		HAL_TIM_Base_Stop_IT(htim);
-		flagDirect = !flagDirect;
-		STOP();
+
 	}
 
 	if (htim->Instance == TIM2)
 	{
-		HCSR04_TMR_OVF_ISR(htim);
+//		HCSR04_TMR_OVF_ISR(htim);
 	}
 }
 
 void Move_Forward(uint32_t car_speed)
 {
-	int pulse = map(0, 100, 0, 999, (int) car_speed);
 	HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
 	HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET);
+	int pulse = map(0, 100, 0, 999, (int) car_speed);
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
 	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
 }
 
 void Move_Backward(uint32_t car_speed)
 {
-	int pulse = map(0, 100, 0, 999, (int) car_speed);
 	HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
 	HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_SET);
+	int pulse = map(0, 100, 0, 999, (int) car_speed);
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
 	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
 }
 
 void Rotate_Left(uint32_t car_speed)
 {
-	int pulse = map(0, 100, 0, 999, (int) car_speed);
 	HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
 	HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET);
+	int pulse = map(0, 100, 0, 999, (int) car_speed);
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
 	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
 }
 
 void Rotate_Right(uint32_t car_speed)
 {
-	int pulse = map(0, 100, 0, 999, (int) car_speed);
 	HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
 	HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_SET);
+	int pulse = map(0, 100, 0, 999, (int) car_speed);
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
 	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
 }
 
-void STOP()
+void Move_Left(uint32_t car_speed)
 {
 	HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET);
+	int pulse = map(0, 100, 0, 999, (int) car_speed);
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) 0);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
+}
+
+void Move_Right(uint32_t car_speed)
+{
+	HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
 	HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_SET);
+	int pulse = map(0, 100, 0, 999, (int) car_speed);
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) 0);
+}
+
+void Move_Stop()
+{
+//	HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
+//	HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_SET);
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 0U);
 	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0U);
 }
@@ -554,8 +584,8 @@ void InfraredTracing(InfraredValues* infrared)
 		}
 		else if (infrared->LeftTraValue == Black && (infrared->CenterTraValue == Black && infrared->RightTraValue == Black))
 		{
-			__HAL_TIM_SET_AUTORELOAD(&htim10, DELAY(DELAY_TIME * 3));
-			HAL_TIM_Base_Start_IT(&htim10);
+			pTimerAutoStop = TM_DELAY_TimerAutoReloadValue(pTimerAutoStop, AUTO_STOP_DELAY_TIME * 3);
+			pTimerAutoStop = TM_DELAY_TimerStart(pTimerAutoStop);
 
 			while (infrared->LeftTraValue == Black && (infrared->CenterTraValue == Black && infrared->RightTraValue == Black))
 			{
@@ -573,6 +603,17 @@ void InfraredTracing(InfraredValues* infrared)
 			flagDirect = !flagDirect;
 		}
 	}
+}
+
+void ScanMoveCmd(struct _TM_DELAY_Timer_t* my_timer, void *parameters)
+{
+
+}
+
+void AutoStopMove(struct _TM_DELAY_Timer_t* my_timer, void *parameters)
+{
+	flagDirect = !flagDirect;
+	Move_Stop();
 }
 /* USER CODE END 4 */
 
