@@ -36,7 +36,13 @@
 typedef enum {
     White = 0,
     Black = 1
-} LineColor;
+} LineColor_en;
+
+typedef enum {
+	Straight = 0,
+	Rotation = 1,
+	Turning = 2
+}TypeMovement_en;
 
 typedef struct {
     volatile bool LeftTraValue;
@@ -47,14 +53,16 @@ typedef struct {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define FORWARD_SPEED			(70U)
+#define FORWARD_SPEED			(70)
 #define ROTATE_SPEED 			(FORWARD_SPEED / 2)
+#define ACCELERATION			(2)
 #define CMD_LEN_1				(3U)
 #define CMD_LEN_2				(4U)
 #define CMD_LEN_6				(3U)
 #define SERVO_ANGLE				(90U)
 #define MAX_ATTEMPTS 			(3U)
 #define AUTO_STOP_DELAY_TIME	(500U)
+#define SEARCH_TRACK_LINE_TIME	(500U)
 #define HCSR04_SENSOR1  		(0U)
 #define PERIOD_SCAN_MOVE_CMD	(20U)
 #define REPEAT					(1U)
@@ -96,18 +104,21 @@ InfraredValues infrared;
 float Distance = 0.0;
 TM_DELAY_Timer_t* pTimerScanMoveCmd;
 TM_DELAY_Timer_t* pTimerAutoStop;
+TM_DELAY_Timer_t* pTimerSearchTrackLine;
+int currentSpeed = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-void Move_Forward(uint32_t car_speed);
-void Move_Backward(uint32_t car_speed);
-void Rotate_Left(uint32_t car_speed);
-void Rotate_Right(uint32_t car_speed);
-void Move_Left(uint32_t car_speed);
-void Move_Right(uint32_t car_speed);
-void Move_Stop();
+void Move_Forward(int car_speed);
+void Move_Backward(int car_speed);
+void Rotate_Left(int car_speed);
+void Rotate_Right(int car_speed);
+void Turn_Left(int car_speed);
+void Turn_Right(int car_speed);
+void Stop();
+void Move(int car_speed, TypeMovement_en type);
 uint8_t ConvertCode (uint32_t code);
 int map(int st1, int fn1, int st2, int fn2, int value);
 void ServoWrite(int angle);
@@ -115,6 +126,7 @@ void InfraredTracing(InfraredValues* infrared);
 void ReadSensors(InfraredValues* infrared);
 void ScanMoveCmd(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
 void AutoStopMove(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
+void SearchTrackLine(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -176,6 +188,7 @@ int main(void)
   TM_DELAY_Init();
   pTimerScanMoveCmd	= TM_DELAY_TimerCreate(PERIOD_SCAN_MOVE_CMD, REPEAT, IMMEDIATELY, ScanMoveCmd, NULL);
   pTimerAutoStop = TM_DELAY_TimerCreate(AUTO_STOP_DELAY_TIME, ONCE, AFTER_START_API, AutoStopMove, NULL);
+  pTimerSearchTrackLine = TM_DELAY_TimerCreate(SEARCH_TRACK_LINE_TIME, REPEAT, AFTER_START_API, SearchTrackLine, NULL);
 //  HCSR04_Init(HCSR04_SENSOR1, &htim2);
   /* USER CODE END 2 */
 
@@ -194,21 +207,6 @@ int main(void)
 	  printf("CMD: %c\r\n", cmd);
 	  switch (cmd)
 	  {
-			case 'F':
-				Move_Forward((uint32_t) FORWARD_SPEED);
-				break;
-			case 'B':
-				Move_Backward((uint32_t) FORWARD_SPEED);
-				break;
-			case 'L':
-				Rotate_Left((uint32_t) ROTATE_SPEED);
-				break;
-			case 'R':
-				Rotate_Right((uint32_t) ROTATE_SPEED);
-				break;
-			case 'S':
-				Move_Stop();
-				break;
 			case 'H':
 				servoAngle = servoAngle + 4;
 				if (servoAngle >= 180)
@@ -228,10 +226,8 @@ int main(void)
 			case 'T':
 				InfraredTracing(&infrared);
 			default:
-				Move_Stop();
 				break;
 	  }
-		  cmd = '\000';
 	}
     /* USER CODE END WHILE */
 
@@ -372,81 +368,99 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 	}
 }
 
-// Interrupt Handling Function
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+void Move_Forward(int car_speed)
 {
-	if (htim->Instance == TIM10)
-	{
-		HAL_TIM_Base_Stop_IT(htim);
+	Move(car_speed, Straight);
+}
 
+void Move_Backward(int car_speed)
+{
+	Move(-car_speed, Straight);
+}
+
+void Rotate_Left(int car_speed)
+{
+	Move(-car_speed, Rotation);
+}
+
+void Rotate_Right(int car_speed)
+{
+	Move(car_speed, Rotation);
+}
+
+void Turn_Left(int car_speed)
+{
+	Move(-car_speed, Turning);
+}
+
+void Turn_Right(int car_speed)
+{
+	Move(car_speed, Turning);
+}
+
+void Stop()
+{
+	Move(0, Straight);
+}
+
+void Move(int car_speed, TypeMovement_en type)
+{
+	int pulse;
+
+	if (currentSpeed < car_speed)
+	{
+		currentSpeed = currentSpeed + ACCELERATION;
+
+		if (currentSpeed > car_speed)
+		{
+			currentSpeed = car_speed;
+		}
+	}
+	else if (currentSpeed > car_speed)
+	{
+		currentSpeed = currentSpeed - ACCELERATION;
+
+		if (currentSpeed < car_speed)
+		{
+			currentSpeed = car_speed;
+		}
+	}
+	else
+	{
+		currentSpeed = currentSpeed;
 	}
 
-	if (htim->Instance == TIM2)
+	if (currentSpeed > 0)
 	{
-//		HCSR04_TMR_OVF_ISR(htim);
+		pulse = map(0, 100, 0, 999, currentSpeed);
+		if (type == Straight)
+		{
+			HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
+			HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET);
+		}
+		else if (type == Rotation)
+		{
+			HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
+			HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_SET);
+		}
 	}
-}
+	else
+	{
+		pulse = map(0, -100, 0, 999, currentSpeed);
+		if (type == Straight)
+		{
+			HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
+			HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_SET);
+		}
+		else if (type == Rotation)
+		{
+			HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
+			HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET);
+		}
+	}
 
-void Move_Forward(uint32_t car_speed)
-{
-	HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
-	HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET);
-	int pulse = map(0, 100, 0, 999, (int) car_speed);
 	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
 	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
-}
-
-void Move_Backward(uint32_t car_speed)
-{
-	HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_SET);
-	int pulse = map(0, 100, 0, 999, (int) car_speed);
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
-	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
-}
-
-void Rotate_Left(uint32_t car_speed)
-{
-	HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET);
-	int pulse = map(0, 100, 0, 999, (int) car_speed);
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
-	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
-}
-
-void Rotate_Right(uint32_t car_speed)
-{
-	HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
-	HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_SET);
-	int pulse = map(0, 100, 0, 999, (int) car_speed);
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
-	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
-}
-
-void Move_Left(uint32_t car_speed)
-{
-	HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
-	HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET);
-	int pulse = map(0, 100, 0, 999, (int) car_speed);
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) 0);
-	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
-}
-
-void Move_Right(uint32_t car_speed)
-{
-	HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
-	HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_SET);
-	int pulse = map(0, 100, 0, 999, (int) car_speed);
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
-	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) 0);
-}
-
-void Move_Stop()
-{
-//	HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
-//	HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_SET);
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 0U);
-	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, 0U);
 }
 
 uint8_t ConvertCode (uint32_t code)
@@ -584,10 +598,9 @@ void InfraredTracing(InfraredValues* infrared)
 		}
 		else if (infrared->LeftTraValue == Black && (infrared->CenterTraValue == Black && infrared->RightTraValue == Black))
 		{
-			pTimerAutoStop = TM_DELAY_TimerAutoReloadValue(pTimerAutoStop, AUTO_STOP_DELAY_TIME * 3);
-			pTimerAutoStop = TM_DELAY_TimerStart(pTimerAutoStop);
+			pTimerSearchTrackLine = TM_DELAY_TimerStart(pTimerSearchTrackLine);
 
-			while (infrared->LeftTraValue == Black && (infrared->CenterTraValue == Black && infrared->RightTraValue == Black))
+			while (cmd == 'T' && (infrared->LeftTraValue == Black && (infrared->CenterTraValue == Black && infrared->RightTraValue == Black)))
 			{
 				ReadSensors(infrared);
 
@@ -600,22 +613,71 @@ void InfraredTracing(InfraredValues* infrared)
 					Rotate_Left(ROTATE_SPEED);
 				}
 			}
-			flagDirect = !flagDirect;
+//			flagDirect = !flagDirect;
+			pTimerSearchTrackLine = TM_DELAY_TimerStop(pTimerSearchTrackLine);
 		}
 	}
 }
 
 void ScanMoveCmd(struct _TM_DELAY_Timer_t* my_timer, void *parameters)
 {
-
+	switch (cmd)
+	{
+		case 'F':
+			Move_Forward((int) FORWARD_SPEED);
+			break;
+		case 'B':
+			Move_Backward((int) FORWARD_SPEED);
+			break;
+		case 'L':
+			Rotate_Left((int) ROTATE_SPEED);
+			break;
+		case 'R':
+			Rotate_Right((int) ROTATE_SPEED);
+			break;
+		case 'S':
+			Stop();
+			break;
+		default:
+			break;
+	}
 }
 
 void AutoStopMove(struct _TM_DELAY_Timer_t* my_timer, void *parameters)
 {
+	Stop();
+}
+
+void SearchTrackLine(struct _TM_DELAY_Timer_t* my_timer, void *parameters)
+{
 	flagDirect = !flagDirect;
-	Move_Stop();
 }
 /* USER CODE END 4 */
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM10 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+	/* USER CODE BEGIN Callback 0 */
+	if (htim->Instance == TIM2)
+	{
+//		HCSR04_TMR_OVF_ISR(htim);
+	}
+	/* USER CODE END Callback 0 */
+	if (htim->Instance == TIM10)
+	{
+		HAL_IncTick();
+	}
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.
