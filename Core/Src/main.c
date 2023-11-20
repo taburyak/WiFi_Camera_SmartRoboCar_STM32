@@ -27,7 +27,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <stdbool.h>
-//#include "HCSR04.h"
+#include "HCSR04.h"
 #include "tm_stm32_delay.h"
 /* USER CODE END Includes */
 
@@ -64,11 +64,13 @@ typedef struct {
 #define AUTO_STOP_DELAY_TIME	(500U)
 #define SEARCH_TRACK_LINE_TIME	(500U)
 #define HCSR04_SENSOR1  		(0U)
+#define HCSR04_SENSOR2  		(1U)
 #define PERIOD_SCAN_MOVE_CMD	(20U)
 #define REPEAT					(1U)
 #define ONCE					(0U)
 #define IMMEDIATELY				(1U)
 #define AFTER_START_API			(0U)
+#define HCSR04_SENSOR1  		(0U)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -101,7 +103,8 @@ uint8_t cmdli;
 uint32_t code;
 uint32_t tempCode;
 InfraredValues infrared;
-float Distance = 0.0;
+float distanceFront = 0.0;
+float distanceBack = 0.0;
 TM_DELAY_Timer_t* pTimerScanMoveCmd;
 TM_DELAY_Timer_t* pTimerAutoStop;
 TM_DELAY_Timer_t* pTimerSearchTrackLine;
@@ -127,6 +130,7 @@ void ReadSensors(InfraredValues* infrared);
 void ScanMoveCmd(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
 void AutoStopMove(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
 void SearchTrackLine(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
+float UltraSonicDistance(uint8_t idx);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -174,6 +178,7 @@ int main(void)
   MX_USART1_UART_Init();
   MX_TIM11_Init();
   MX_TIM4_Init();
+  MX_TIM5_Init();
   /* USER CODE BEGIN 2 */
   printf("WiFi Robot Car is Started\r\n");
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
@@ -186,21 +191,17 @@ int main(void)
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
   ServoWrite(90);
   TM_DELAY_Init();
+  HCSR04_Init(HCSR04_SENSOR1, &htim2);
+  HCSR04_Init(HCSR04_SENSOR2, &htim5);
   pTimerScanMoveCmd	= TM_DELAY_TimerCreate(PERIOD_SCAN_MOVE_CMD, REPEAT, IMMEDIATELY, ScanMoveCmd, NULL);
   pTimerAutoStop = TM_DELAY_TimerCreate(AUTO_STOP_DELAY_TIME, ONCE, AFTER_START_API, AutoStopMove, NULL);
   pTimerSearchTrackLine = TM_DELAY_TimerCreate(SEARCH_TRACK_LINE_TIME, REPEAT, AFTER_START_API, SearchTrackLine, NULL);
-//  HCSR04_Init(HCSR04_SENSOR1, &htim2);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-//	  HCSR04_Trigger(HCSR04_SENSOR1);
-//	  HAL_Delay(15);
-//	  Distance = HCSR04_Read(HCSR04_SENSOR1);
-//	  printf("Distance = %d cm\r\n", (int) Distance);
-//	  HAL_Delay(1000);
 	if (flagCmdCompletion)
 	{
 	  flagCmdCompletion = false;
@@ -362,10 +363,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 {
-	if (htim->Instance == TIM2)
-	{
-//		HCSR04_TMR_IC_ISR(htim);
-	}
+	HCSR04_TMR_IC_ISR(htim);
 }
 
 void Move_Forward(int car_speed)
@@ -652,6 +650,17 @@ void SearchTrackLine(struct _TM_DELAY_Timer_t* my_timer, void *parameters)
 {
 	flagDirect = !flagDirect;
 }
+
+float UltraSonicDistance(uint8_t idx)
+{
+	HCSR04_Trigger(HCSR04_SENSOR1);
+	HCSR04_Trigger(HCSR04_SENSOR2);
+	HAL_Delay(15);
+	distanceFront = HCSR04_Read(HCSR04_SENSOR1);
+	distanceBack = HCSR04_Read(HCSR04_SENSOR2);
+	printf("Distance Front = %d cm\r\n", (int) distanceFront);
+	printf("Distance Back = %d cm\r\n", (int) distanceBack);
+}
 /* USER CODE END 4 */
 
 /**
@@ -664,16 +673,12 @@ void SearchTrackLine(struct _TM_DELAY_Timer_t* my_timer, void *parameters)
   */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-	/* USER CODE BEGIN Callback 0 */
-	if (htim->Instance == TIM2)
-	{
-//		HCSR04_TMR_OVF_ISR(htim);
-	}
-	/* USER CODE END Callback 0 */
-	if (htim->Instance == TIM10)
-	{
-		HAL_IncTick();
-	}
+  /* USER CODE BEGIN Callback 0 */
+  HCSR04_TMR_OVF_ISR(htim);
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM10) {
+    HAL_IncTick();
+  }
   /* USER CODE BEGIN Callback 1 */
 
   /* USER CODE END Callback 1 */

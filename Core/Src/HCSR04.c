@@ -11,8 +11,7 @@
  */
 
 #include "HCSR04.h"
-
-#include "dwt_stm32_delay.h"
+#include "tm_stm32_delay.h"
 #include "HCSR04_cfg.h"
 
 typedef struct
@@ -40,7 +39,7 @@ void HCSR04_Init(uint8_t au8_HCSR04_Instance, TIM_HandleTypeDef* TMR_Handle)
 	TIM_MasterConfigTypeDef sMasterConfig = {0};
 	TIM_IC_InitTypeDef sConfigIC = {0};
 
-    DWT_Delay_Init();
+	TM_DELAY_Init();
 
 	/*--------[ Configure The HCSR04 TRIGGER GPIO Pin ]-------*/
 
@@ -180,6 +179,6 @@ float HCSR04_Read(uint8_t au8_HCSR04_Instance)
 void HCSR04_Trigger(uint8_t au8_HCSR04_Instance)
 {
 	HAL_GPIO_WritePin(HCSR04_CfgParam[au8_HCSR04_Instance].TRIG_GPIO, HCSR04_CfgParam[au8_HCSR04_Instance].TRIG_PIN, 1);
-	DWT_Delay_us(2);
+	Delay(2U);
 	HAL_GPIO_WritePin(HCSR04_CfgParam[au8_HCSR04_Instance].TRIG_GPIO, HCSR04_CfgParam[au8_HCSR04_Instance].TRIG_PIN, 0);
 }
