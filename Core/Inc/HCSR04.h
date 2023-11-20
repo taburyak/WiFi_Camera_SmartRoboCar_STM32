@@ -19,7 +19,7 @@
 
 
 // The Number OF HC-SR04 Ultrasonic Sensors To Be Used In The Project
-#define HCSR04_UNITS  1
+#define HCSR04_UNITS  2
 
 typedef struct
 {
