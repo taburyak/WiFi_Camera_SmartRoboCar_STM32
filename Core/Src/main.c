@@ -54,8 +54,10 @@ typedef struct {
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 #define FORWARD_SPEED			(70)
+#define TURNING_SPEED			(FORWARD_SPEED)
 #define ROTATE_SPEED 			(FORWARD_SPEED / 2)
 #define ACCELERATION			(2)
+#define DISTANCE_STOP			(20U)
 #define CMD_LEN_1				(3U)
 #define CMD_LEN_2				(4U)
 #define CMD_LEN_6				(3U)
@@ -66,6 +68,7 @@ typedef struct {
 #define HCSR04_SENSOR1  		(0U)
 #define HCSR04_SENSOR2  		(1U)
 #define PERIOD_SCAN_MOVE_CMD	(20U)
+#define PERIOD_SCAN_DISTANCE	(200U)
 #define REPEAT					(1U)
 #define ONCE					(0U)
 #define IMMEDIATELY				(1U)
@@ -97,6 +100,7 @@ uint8_t rxBuffer_6[CMD_LEN_6] = {'\000'};
 volatile uint8_t cmd = '\000';
 volatile bool flagCmdCompletion = false;
 volatile bool flagDirect = false;
+volatile bool flagScanDistance = false;
 uint8_t servoAngle = SERVO_ANGLE;
 uint8_t bitIndex;
 uint8_t cmdli;
@@ -108,6 +112,7 @@ float distanceBack = 0.0;
 TM_DELAY_Timer_t* pTimerScanMoveCmd;
 TM_DELAY_Timer_t* pTimerAutoStop;
 TM_DELAY_Timer_t* pTimerSearchTrackLine;
+TM_DELAY_Timer_t* pTimerScanDistance;
 int currentSpeed = 0;
 /* USER CODE END PV */
 
@@ -130,6 +135,7 @@ void ReadSensors(InfraredValues* infrared);
 void ScanMoveCmd(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
 void AutoStopMove(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
 void SearchTrackLine(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
+void ScanDistance(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
 float UltraSonicDistance(uint8_t idx);
 /* USER CODE END PFP */
 
@@ -196,38 +202,64 @@ int main(void)
   pTimerScanMoveCmd	= TM_DELAY_TimerCreate(PERIOD_SCAN_MOVE_CMD, REPEAT, IMMEDIATELY, ScanMoveCmd, NULL);
   pTimerAutoStop = TM_DELAY_TimerCreate(AUTO_STOP_DELAY_TIME, ONCE, AFTER_START_API, AutoStopMove, NULL);
   pTimerSearchTrackLine = TM_DELAY_TimerCreate(SEARCH_TRACK_LINE_TIME, REPEAT, AFTER_START_API, SearchTrackLine, NULL);
+  pTimerScanDistance = TM_DELAY_TimerCreate(PERIOD_SCAN_DISTANCE, REPEAT, IMMEDIATELY, ScanDistance, NULL);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	if (flagCmdCompletion)
-	{
-	  flagCmdCompletion = false;
-	  printf("CMD: %c\r\n", cmd);
-	  switch (cmd)
+	  if (flagScanDistance)
 	  {
-			case 'H':
-				servoAngle = servoAngle + 4;
-				if (servoAngle >= 180)
-				{
-					servoAngle = 180;
-				}
-				ServoWrite(servoAngle);
-				break;
-			case 'G':
-				servoAngle = servoAngle - 4;
-				if (servoAngle <= 0)
-				{
-					servoAngle = 0;
-				}
-				ServoWrite(servoAngle);
-				break;
-			case 'T':
-				InfraredTracing(&infrared);
-			default:
-				break;
+		  flagScanDistance = false;
+
+		  distanceFront = UltraSonicDistance(HCSR04_SENSOR1);
+		  distanceBack = UltraSonicDistance(HCSR04_SENSOR2);
+//		  printf("Distance Front = %d\r\n", (int) distanceFront);
+//		  printf("Distance Back = %d\r\n", (int) distanceBack);
+
+		  if (distanceFront < DISTANCE_STOP && cmd == 'F')
+		  {
+			  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) 0U);
+			  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) 0U);
+			  cmd = 'S';
+		  }
+
+		  if (distanceBack < DISTANCE_STOP && cmd == 'B')
+		  {
+			  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) 0U);
+			  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) 0U);
+			  cmd = 'S';
+		  }
+	  }
+
+	  if (flagCmdCompletion)
+	  {
+		  flagCmdCompletion = false;
+		  printf("CMD: %c\r\n", cmd);
+		  switch (cmd)
+		  {
+				case 'H':
+					servoAngle = servoAngle + 4;
+					if (servoAngle >= 180)
+					{
+						servoAngle = 180;
+					}
+					ServoWrite(servoAngle);
+					break;
+				case 'G':
+					servoAngle = servoAngle - 4;
+					if (servoAngle <= 0)
+					{
+						servoAngle = 0;
+					}
+					ServoWrite(servoAngle);
+					break;
+				case 'T':
+					InfraredTracing(&infrared);
+					break;
+				default:
+					break;
 	  }
 	}
     /* USER CODE END WHILE */
@@ -435,11 +467,22 @@ void Move(int car_speed, TypeMovement_en type)
 		{
 			HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
 			HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET);
+			__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
+			__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
 		}
 		else if (type == Rotation)
 		{
 			HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
 			HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_SET);
+			__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
+			__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
+		}
+		else if (type == Turning)
+		{
+			HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
+			HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET);
+			__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse / 3);
+			__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
 		}
 	}
 	else
@@ -449,16 +492,24 @@ void Move(int car_speed, TypeMovement_en type)
 		{
 			HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
 			HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_SET);
+			__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
+			__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
 		}
 		else if (type == Rotation)
 		{
 			HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_RESET);
 			HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET);
+			__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
+			__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
+		}
+		else if (type == Turning)
+		{
+			HAL_GPIO_WritePin(D2_GPIO_Port, D2_Pin, GPIO_PIN_SET);
+			HAL_GPIO_WritePin(D4_GPIO_Port, D4_Pin, GPIO_PIN_RESET);
+			__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
+			__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse / 3);
 		}
 	}
-
-	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) pulse);
-	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) pulse);
 }
 
 uint8_t ConvertCode (uint32_t code)
@@ -611,7 +662,6 @@ void InfraredTracing(InfraredValues* infrared)
 					Rotate_Left(ROTATE_SPEED);
 				}
 			}
-//			flagDirect = !flagDirect;
 			pTimerSearchTrackLine = TM_DELAY_TimerStop(pTimerSearchTrackLine);
 		}
 	}
@@ -628,10 +678,12 @@ void ScanMoveCmd(struct _TM_DELAY_Timer_t* my_timer, void *parameters)
 			Move_Backward((int) FORWARD_SPEED);
 			break;
 		case 'L':
-			Rotate_Left((int) ROTATE_SPEED);
+			Rotate_Left(ROTATE_SPEED);
+//			Turn_Left((int) TURNING_SPEED);
 			break;
 		case 'R':
-			Rotate_Right((int) ROTATE_SPEED);
+			Rotate_Right(ROTATE_SPEED);
+//			Turn_Right((int) TURNING_SPEED);
 			break;
 		case 'S':
 			Stop();
@@ -651,15 +703,16 @@ void SearchTrackLine(struct _TM_DELAY_Timer_t* my_timer, void *parameters)
 	flagDirect = !flagDirect;
 }
 
+void ScanDistance(struct _TM_DELAY_Timer_t* my_timer, void *parameters)
+{
+	flagScanDistance = true;
+}
+
 float UltraSonicDistance(uint8_t idx)
 {
-	HCSR04_Trigger(HCSR04_SENSOR1);
-	HCSR04_Trigger(HCSR04_SENSOR2);
-	HAL_Delay(15);
-	distanceFront = HCSR04_Read(HCSR04_SENSOR1);
-	distanceBack = HCSR04_Read(HCSR04_SENSOR2);
-	printf("Distance Front = %d cm\r\n", (int) distanceFront);
-	printf("Distance Back = %d cm\r\n", (int) distanceBack);
+	HCSR04_Trigger(idx);
+	HAL_Delay(1);
+	return HCSR04_Read(idx);
 }
 /* USER CODE END 4 */
 
