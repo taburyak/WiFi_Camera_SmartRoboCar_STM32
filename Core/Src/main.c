@@ -18,6 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "adc.h"
 #include "dma.h"
 #include "tim.h"
 #include "usart.h"
@@ -68,12 +69,15 @@ typedef struct {
 #define HCSR04_SENSOR1  		(0U)
 #define HCSR04_SENSOR2  		(1U)
 #define PERIOD_SCAN_MOVE_CMD	(20U)
-#define PERIOD_SCAN_DISTANCE	(200U)
+#define PERIOD_SCAN_DISTANCE	(100U)
+#define PERIOD_SCAN_VOLTAGE_BAT (5000U)
 #define REPEAT					(1U)
 #define ONCE					(0U)
 #define IMMEDIATELY				(1U)
 #define AFTER_START_API			(0U)
 #define HCSR04_SENSOR1  		(0U)
+#define MAX_VOLTAGE_BAT			(9.2)
+#define MIN_VOLTAGE_BAT			(5.6)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -101,6 +105,7 @@ volatile uint8_t cmd = '\000';
 volatile bool flagCmdCompletion = false;
 volatile bool flagDirect = false;
 volatile bool flagScanDistance = false;
+volatile bool flagScanVoltageBat = false;
 uint8_t servoAngle = SERVO_ANGLE;
 uint8_t bitIndex;
 uint8_t cmdli;
@@ -109,10 +114,12 @@ uint32_t tempCode;
 InfraredValues infrared;
 float distanceFront = 0.0;
 float distanceBack = 0.0;
+float voltageBat = 0.0;
 TM_DELAY_Timer_t* pTimerScanMoveCmd;
 TM_DELAY_Timer_t* pTimerAutoStop;
 TM_DELAY_Timer_t* pTimerSearchTrackLine;
 TM_DELAY_Timer_t* pTimerScanDistance;
+TM_DELAY_Timer_t* pTimerScanVoltageBat;
 int currentSpeed = 0;
 /* USER CODE END PV */
 
@@ -136,6 +143,7 @@ void ScanMoveCmd(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
 void AutoStopMove(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
 void SearchTrackLine(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
 void ScanDistance(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
+void ScanVoltageBat(struct _TM_DELAY_Timer_t* my_timer, void *parameters);
 float UltraSonicDistance(uint8_t idx);
 /* USER CODE END PFP */
 
@@ -185,8 +193,10 @@ int main(void)
   MX_TIM11_Init();
   MX_TIM4_Init();
   MX_TIM5_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
   printf("WiFi Robot Car is Started\r\n");
+  HAL_ADC_Start(&hadc1);
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
   HAL_UART_Receive_DMA(&huart1, rxBuffer_1, CMD_LEN_1);
@@ -203,12 +213,25 @@ int main(void)
   pTimerAutoStop = TM_DELAY_TimerCreate(AUTO_STOP_DELAY_TIME, ONCE, AFTER_START_API, AutoStopMove, NULL);
   pTimerSearchTrackLine = TM_DELAY_TimerCreate(SEARCH_TRACK_LINE_TIME, REPEAT, AFTER_START_API, SearchTrackLine, NULL);
   pTimerScanDistance = TM_DELAY_TimerCreate(PERIOD_SCAN_DISTANCE, REPEAT, IMMEDIATELY, ScanDistance, NULL);
+  pTimerScanDistance = TM_DELAY_TimerCreate(PERIOD_SCAN_VOLTAGE_BAT, REPEAT, IMMEDIATELY, ScanVoltageBat, NULL);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  if (flagScanVoltageBat)
+	  {
+		  flagScanVoltageBat = false;
+		  HAL_ADC_Start(&hadc1);
+		  voltageBat = (float) HAL_ADC_GetValue(&hadc1) * MAX_VOLTAGE_BAT / 4096.0;
+		  printf("ADC value = %ld.%d\r\n", (uint32_t) voltageBat, (uint8_t) (((float) voltageBat - (uint32_t) voltageBat) * 10.0));
+		  if (voltageBat < MIN_VOLTAGE_BAT)
+		  {
+			  Error_Handler();
+		  }
+	  }
+
 	  if (flagScanDistance)
 	  {
 		  flagScanDistance = false;
@@ -220,15 +243,17 @@ int main(void)
 
 		  if (distanceFront < DISTANCE_STOP && cmd == 'F')
 		  {
-			  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) 0U);
-			  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) 0U);
+			  currentSpeed = 0;
+			  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) currentSpeed);
+			  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) currentSpeed);
 			  cmd = 'S';
 		  }
 
 		  if (distanceBack < DISTANCE_STOP && cmd == 'B')
 		  {
-			  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) 0U);
-			  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) 0U);
+			  currentSpeed = 0;
+			  __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) currentSpeed);
+			  __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) currentSpeed);
 			  cmd = 'S';
 		  }
 	  }
@@ -714,6 +739,11 @@ float UltraSonicDistance(uint8_t idx)
 	HAL_Delay(1);
 	return HCSR04_Read(idx);
 }
+
+void ScanVoltageBat(struct _TM_DELAY_Timer_t* my_timer, void *parameters)
+{
+	flagScanVoltageBat = true;
+}
 /* USER CODE END 4 */
 
 /**
@@ -744,10 +774,15 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
+	currentSpeed = 0;
+	__HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, (uint32_t) currentSpeed);
+	__HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_1, (uint32_t) currentSpeed);
+	cmd = 'S';
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
   while (1)
   {
+
   }
   /* USER CODE END Error_Handler_Debug */
 }
