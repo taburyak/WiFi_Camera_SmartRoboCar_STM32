@@ -225,7 +225,9 @@ int main(void)
 		  flagScanVoltageBat = false;
 		  HAL_ADC_Start(&hadc1);
 		  voltageBat = (float) HAL_ADC_GetValue(&hadc1) * MAX_VOLTAGE_BAT / 4096.0;
-		  printf("ADC value = %ld.%d\r\n", (uint32_t) voltageBat, (uint8_t) (((float) voltageBat - (uint32_t) voltageBat) * 10.0));
+		  printf("ADC value = %ld.%d (%d%%)\r\n", (uint32_t) voltageBat,
+				  (uint8_t) (((float) voltageBat - (uint32_t) voltageBat) * 10.0),
+				  map(56, 84, 0, 100, (int) (voltageBat * 10.0)));
 		  if (voltageBat < MIN_VOLTAGE_BAT)
 		  {
 			  Error_Handler();
